@@ -9,7 +9,7 @@ from einops import rearrange, repeat
 
 from gpt_models.reversible import ReversibleSequence, SequentialSequence
 
-__all__ = ['gpt_rs']
+__all__ = ['gpt_sa1']
 # functions
 
 
@@ -314,7 +314,44 @@ class gMLPBlock(nn.Module):
     x = self.proj_out(x)
     return x
 
+class SABlock(nn.Module):
+  def __init__(
+      self,
+      *,
+      dim,
+      seq_len,
+      dim_ff,
+      heads=4,
+      causal=False,
+      window=None,
+      attn_dim=None,
+      act=nn.Identity()
+  ):
+    super().__init__()
+    is_windowed = exists(window) and window < seq_len
+
+    SGU_klass = partial(CausalLocalSGU, window=window) if is_windowed else CausalSGU
+    Attention_klass = partial(LocalAttention, window=window) if is_windowed else Attention
+
+    self.attn = Attention_klass(dim_in=dim, dim_inner=attn_dim,
+                                dim_out=dim_ff // 2) if exists(attn_dim) else None
+
+    self.proj_in = nn.Sequential(
+        nn.Linear(dim, dim_ff),
+        nn.GELU()
+    )
+    # self.sgu = SGU_klass(dim_ff, seq_len, causal, heads=heads, act=act)
+    self.proj_out = nn.Linear(dim_ff // 2, dim)
+
+  def forward(self, x):
+    gate_res = self.attn(x) if exists(self.attn) else None
+    x = self.proj_in(gate_res)
+    # x = self.sgu(x, gate_res=gate_res)
+    x = self.proj_out(x)
+    return x
 # main classes
+
+
 class RSGPT(nn.Module):
   def __init__(
       self,

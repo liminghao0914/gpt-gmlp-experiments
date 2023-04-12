@@ -418,6 +418,38 @@ class Block(nn.Module):
     x = x + m
     return x, present
 
+class SABlock(nn.Module):
+  def __init__(
+      self,
+      *,
+      dim,
+      seq_len,
+      dim_ff,
+      heads=4,
+      causal=False,
+      window=None,
+      attn_dim=None,
+      act=nn.Identity()
+  ):
+    super().__init__()
+    is_windowed = exists(window) and window < seq_len
+
+    Attention_klass = partial(LocalAttention, window=window) if is_windowed else Attention
+
+    self.attn = Attention_klass(dim_in=dim, dim_inner=attn_dim,
+                                dim_out=dim_ff // 2) if exists(attn_dim) else None
+
+    self.proj_in = nn.Sequential(
+        nn.Linear(dim, dim_ff),
+        nn.GELU()
+    )
+
+    self.proj_out = nn.Linear(dim_ff // 2, dim)
+
+  def forward(self, x):
+    gate_res = self.attn(x) if exists(self.attn) else None
+    x = self.proj_out(gate_res)
+    return x
 
 # main classes
 
@@ -427,78 +459,77 @@ class SAGPT(nn.Module):
       *,
       num_tokens,
       dim,
+      depth,
       seq_len,
+      heads=1,
+      ff_mult=4,
       prob_survival=1.,
+      reversible=False,
+      window=None,
+      attn_dim=None,
+      act=nn.Identity()
   ):
     super().__init__()
+    dim_ff = dim * ff_mult
     self.seq_len = seq_len
     self.prob_survival = prob_survival
 
-    config = GPT2Config(n_embd=dim)
     self.to_embed = nn.Embedding(num_tokens, dim)
 
-    self.wte = nn.Embedding(num_tokens, dim)
-    self.wpe = nn.Embedding(seq_len, dim)
-    block = Block(config.n_ctx, config, scale=True)
-    self.h = nn.ModuleList([copy.deepcopy(block) for _ in range(config.n_layer)])
-    self.ln_f = nn.LayerNorm(num_tokens * 2, eps=1e-5)
+    window = cast_tuple(window, depth)
+    window = tuple(map(lambda t: t if isinstance(t, tuple) else (t, 1), window))
 
-  def forward(self, input_ids, position_ids=None, token_type_ids=None, past=None):
-    if past is None:
-      past_length = 0
-      past = [None] * len(self.h)
-    else:
-      past_length = past[0][0].size(-2)
-    if position_ids is None:
-      position_ids = torch.arange(past_length, input_ids.size(-1) + past_length, dtype=torch.long,
-                                  device=input_ids.device)
-      position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
+    attn_dims = cast_tuple(attn_dim, depth)
 
-    input_shape = input_ids.size()
-    input_ids = input_ids.view(-1, input_ids.size(-1))
-    position_ids = position_ids.view(-1, position_ids.size(-1))
+    assert len(window) == depth, f'num window sizes {len(window)} must be equal to depth {depth}'
 
-    inputs_embeds = self.wte(input_ids)
-    position_embeds = self.wpe(position_ids)
-    if token_type_ids is not None:
-      token_type_ids = token_type_ids.view(-1, token_type_ids.size(-1))
-      token_type_embeds = self.wte(token_type_ids)
-    else:
-      token_type_embeds = 0
-    hidden_states = inputs_embeds + position_embeds + token_type_embeds
-    presents = []
-    for block, layer_past in zip(self.h, past):
-      hidden_states, present = block(hidden_states, layer_past)
-      presents.append(present)
-    hidden_states = self.ln_f(hidden_states)
-    output_shape = input_shape + (hidden_states.size(-1),)
-    return hidden_states.view(*output_shape)
+    layers = nn.ModuleList([])
 
+    for ind, (w, ax), attn_dim in zip(range(depth), window, attn_dims):
+      attn_dim = attn_dim if exists(window) else None
+      def get_gmlp(): return PreNorm(dim, AxiallyFold(dim, ax, SABlock(
+          dim=dim, dim_ff=dim_ff, seq_len=seq_len, heads=heads, window=w, act=act, attn_dim=attn_dim)))
+      
+      layer_blocks = nn.ModuleList([
+          get_gmlp()
+      ])
 
-'''
-    code by TaeHwan Jung(@graykode)
-    Original Paper and repository here : https://github.com/openai/gpt-2
-    GPT2 Pytorch Model : https://github.com/huggingface/pytorch-pretrained-BERT
-'''
+      if reversible:
+        layer_blocks.append(FeedForward(dim, mult=ff_mult))
 
+      layers.append(layer_blocks)
 
-class GPT2Config(object):
-  def __init__(
-          self,
-          vocab_size_or_config_json_file=50257,
-          n_positions=1024,
-          n_ctx=1024,
-          n_embd=768,
-          n_layer=16,
-          n_head=16,
-          layer_norm_epsilon=1e-5,
-          initializer_range=0.02,
-  ):
-    self.vocab_size = vocab_size_or_config_json_file
-    self.n_ctx = n_ctx
-    self.n_positions = n_positions
-    self.n_embd = n_embd
-    self.n_layer = n_layer
-    self.n_head = n_head
-    self.layer_norm_epsilon = layer_norm_epsilon
-    self.initializer_range = initializer_range
+    execute_klass = SequentialSequence if not reversible else ReversibleSequence
+    self.net = execute_klass(layers)
+
+    self.to_logits = nn.Sequential(
+        nn.LayerNorm(dim),
+        nn.Linear(dim, num_tokens)
+    )
+
+  def forward(self, x):
+    layer_dropout = 1. - self.prob_survival
+
+    x = self.to_embed(x)
+    out = self.net(x, layer_dropout=layer_dropout)
+    return self.to_logits(out)
+  
+def gpt_sa(options):
+  num_tokens = options['num_tokens']
+  dim = options['dim']
+  depth = options['depth']
+  seq_len = options['seq_len']
+  window = options['window']
+  # return SAGPT(
+  #   num_tokens = num_tokens,
+  #   dim = dim,
+  #   seq_len = seq_len,
+  # )
+  return SAGPT(
+    num_tokens = num_tokens,
+    dim = dim,
+    depth = depth,
+    seq_len = seq_len,
+    window = window,
+    attn_dim=2
+  )

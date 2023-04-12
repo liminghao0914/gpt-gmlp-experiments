@@ -134,4 +134,4 @@ def train():
       logging.info(output_str)
 
 
-# train()
+train()

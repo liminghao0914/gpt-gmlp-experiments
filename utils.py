@@ -9,7 +9,7 @@ def parse_args():
   parser.add_argument('--dataset', '-d', type=str, default='enwik8')
   parser.add_argument('--model', '-m', type=str, default='gmlp')
   parser.add_argument('--gpu', type=int, default=0)
-  parser.add_argument('--batch_size', type=int, default=16)
+  parser.add_argument('--batch_size', '-b', type=int, default=16)
   parser.add_argument('--embed_dim', type=int, default=300)
   parser.add_argument('--d_hidden', type=int, default=200)
   parser.add_argument('--dp_ratio', type=int, default=0.2)
