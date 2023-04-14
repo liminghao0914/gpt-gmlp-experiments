@@ -65,7 +65,7 @@ if 'enwik' in args.dataset:
 
 elif 'wikitext' in args.dataset:
   TEXT = data.Field(lower=True, tokenize='spacy',tokenizer_language = 'en_core_web_sm', batch_first=True)
-  train, dev, test = datasets.WikiText103.splits(TEXT)
+  train, dev, test = datasets.WikiText2.splits(TEXT)
   trX = np.fromstring(' '.join(train[0].text), dtype=np.uint8)
   vaX = np.fromstring(' '.join(dev[0].text), dtype=np.uint8)
   testX = np.fromstring(' '.join(test[0].text), dtype=np.uint8)
@@ -134,4 +134,4 @@ def train():
       logging.info(output_str)
 
 
-train()
+# train()

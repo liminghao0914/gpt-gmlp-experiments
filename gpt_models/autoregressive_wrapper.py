@@ -73,12 +73,24 @@ class AutoregressiveWrapper(nn.Module):
     return out
 
   def forward(self, x, **kwargs):
-    x = x.to(self.device)
+    # x = x.to(self.device)
     xi, xo = x[:, :-1], x[:, 1:]
     out = self.net(xi, **kwargs)
     loss = F.cross_entropy(out.transpose(1, 2), xo, ignore_index=self.ignore_index)
     return loss
 
+  def entropy_loss(self, test_data, device, **kwargs):
+    # x = x.to(self.device)
+    losses = []
+    with torch.no_grad():
+      for x in test_data:
+        xi, xo = x[:, :-1], x[:, 1:]
+        out = self.net(xi, **kwargs)
+        loss = F.cross_entropy(out.transpose(1, 2), xo, ignore_index=self.ignore_index, reduction='none')
+        losses.append(loss)
+    losses = torch.cat(losses)
+    return losses.mean().item()
+  
   def bcp_loss(self, test_data, device, **kwargs):
     total_bits = 0
     total_chars = 0
@@ -90,7 +102,6 @@ class AutoregressiveWrapper(nn.Module):
         label = seq[:, 1:]
         output = self.net(seq_tensor,**kwargs)
         output = output.transpose(1, 2)
-
         loss = F.cross_entropy(output, label, ignore_index=self.ignore_index)
         bits = loss * seq_len
         total_bits += bits.item()
@@ -100,5 +111,22 @@ class AutoregressiveWrapper(nn.Module):
     # print(f'Bits per character: {bpc}')
     return bpc
 
+  def perplexity(self, test_data, device, **kwargs):
+    probs_list = []
+    with torch.no_grad():
+      for seq in test_data:
+        seq_len = seq.shape[1]
+        for _ in range(seq_len):
+          x = seq[:, -self.max_seq_len:]
+          logits = self.net(x, **kwargs)[:, -1, :]
+
+          filtered_logits = top_k(logits)
+          probs = F.softmax(filtered_logits, dim=-1)
+        probs_list.append(torch.log(probs).mean())
+    perplexity = torch.exp(torch.stack(probs_list).mean()).item()
+    print(f'Perplexity: {perplexity}')
+    # print(f'Bits per character: {bpc}')
+    return perplexity
+  
   def save(self, path):
     torch.save(self.net, path)

@@ -32,24 +32,27 @@ print('Enter a string to generate from:')
 # print(output_str)
 it = 0
 inps = []
-while it<100:
+while it<10:
     inp_loader = cycle(DataLoader(val_dataset))
     inps.append(next(inp_loader))
     it += 1
 print("loaded inps")
 
-losses = []
-for i in tqdm.tqdm(range(1000), desc='testing'):
-  epoch = i * 100
-  model = torch.load(f'./{args.results_dir}/{args.model}_{args.dataset}_ep_{epoch}.pt').to(args.gpu).cuda()
-  
+for model_name in ["gpt_gmlp", "gpt_rs", "gpt_sa"]:
+  losses = []
+  print(model_name)
+  for i in tqdm.tqdm(range(1000), desc='testing'):
+    epoch = i * 100
+    model = torch.load(f'./{args.results_dir}/{model_name}_{args.dataset}_ep_{epoch}.pt').to(args.gpu).cuda()
+    
 
-  model = AutoregressiveWrapper(model)
-  loss = model.bcp_loss(inps, args.gpu)
-  losses.append(loss)
+    model = AutoregressiveWrapper(model)
+    loss = model.perplexity(inps, args.gpu)
+    print(loss)
+    losses.append(loss)
 
-# avg_loss = np.mean(losses)
+  # avg_loss = np.mean(losses)
 
 
-# save losses
-np.save(f'./{args.results_dir}/losses/{args.model}_{args.dataset}_losses.npy', np.array(losses))
+  # save losses
+  np.save(f'./{args.results_dir}/losses/{model_name}_{args.dataset}_losses_pp.npy', np.array(losses))

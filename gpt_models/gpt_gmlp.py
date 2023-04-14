@@ -5,6 +5,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn, einsum
 
+
+
 from einops import rearrange, repeat
 
 from gpt_models.reversible import ReversibleSequence, SequentialSequence
@@ -373,3 +375,6 @@ def gpt_gmlp(options):
     seq_len = seq_len,
     window = window
   )
+
+
+
